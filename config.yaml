@@ -1,0 +1,103 @@
+# RSV Timing / Beyfortus Analysis Pipeline Configuration
+# Using NSSP Emergency Department RSV Visit Data
+# All configurable parameters in one place
+
+# Data source - NSSP ED Visit Trajectories
+socrata:
+  dataset_id: "rdmq-nq56"
+  base_url: "https://data.cdc.gov/resource"
+  timeout: 30
+  max_retries: 3
+  page_size: 50000
+
+# Fields to extract from Socrata
+fields:
+  week_end: "week_end"
+  geography: "geography"
+  rsv_pct: "percent_visits_rsv"
+  rsv_pct_smoothed: "percent_visits_smoothed_rsv"
+  covid_pct: "percent_visits_covid"
+  flu_pct: "percent_visits_influenza"
+  combined_pct: "percent_visits_combined"
+
+# Season definitions (July-June to capture early summer activity)
+# NSSP data available from Oct 2022 onwards
+seasons:
+  - name: "2023-2024"
+    start: "2023-07-01"
+    end: "2024-06-30"
+  - name: "2024-2025"
+    start: "2024-07-01"
+    end: "2025-06-30"
+
+# Primary outcome field
+primary_outcome: "rsv_pct"
+
+# Fixed prophylaxis window (per season year Y: Oct 1 Y to Mar 31 Y+1)
+# This aligns with CDC's Oct 1 through Mar 31 guidance for continental US
+fixed_window:
+  start_month: 10
+  start_day: 1
+  end_month: 3
+  end_day: 31
+
+# Analysis parameters
+analysis:
+  smoothing_window: 3                    # weeks for moving average
+  material_activity_threshold: 0.20      # fraction of peak (primary)
+  material_activity_sensitivity: 0.10    # fraction of peak (sensitivity analysis)
+
+# Trigger-based onset detection (threshold method)
+trigger:
+  method: "threshold"
+  consecutive_weeks: 2                   # sustained weeks above threshold
+  lead_weeks: 2                          # start window this many weeks before onset
+  window_duration_weeks: 24              # ~5.5 months protection (matches Beyfortus efficacy)
+
+# Geographic scope
+geography:
+  # Exclude jurisdictions with different guidance, incomplete data, or aggregates
+  exclude_jurisdictions:
+    - "Florida"       # Year-round guidance per CDC
+    - "Alaska"        # Different timing patterns
+    - "Hawaii"        # Different timing patterns
+    - "Missouri"      # No NSSP data available
+    - "South Dakota"  # No NSSP data available
+    - "Guam"          # Territory, no data
+    - "Puerto Rico"   # Territory
+    - "Virgin Islands"  # Territory
+    - "National"      # National aggregate
+
+  # Southeast states for focused analysis (early RSV activity)
+  southeast_states:
+    - "Georgia"
+    - "Alabama"
+    - "Mississippi"
+    - "Louisiana"
+    - "South Carolina"
+    - "North Carolina"
+    - "Tennessee"
+    - "Arkansas"
+
+  # Non-Southeast comparator states
+  comparator_states:
+    - "New York"
+    - "Minnesota"
+
+# HHS Region mappings (full state names for NSSP)
+hhs_regions:
+  1: ["Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont"]
+  2: ["New Jersey", "New York"]
+  3: ["Delaware", "District of Columbia", "Maryland", "Pennsylvania", "Virginia", "West Virginia"]
+  4: ["Alabama", "Florida", "Georgia", "Kentucky", "Mississippi", "North Carolina", "South Carolina", "Tennessee"]
+  5: ["Illinois", "Indiana", "Michigan", "Minnesota", "Ohio", "Wisconsin"]
+  6: ["Arkansas", "Louisiana", "New Mexico", "Oklahoma", "Texas"]
+  7: ["Iowa", "Kansas", "Missouri", "Nebraska"]
+  8: ["Colorado", "Montana", "North Dakota", "South Dakota", "Utah", "Wyoming"]
+  9: ["Arizona", "California", "Hawaii", "Nevada"]
+  10: ["Alaska", "Idaho", "Oregon", "Washington"]
+
+# Output settings
+output:
+  figure_dpi: 300
+  figure_format: ["png", "pdf"]
