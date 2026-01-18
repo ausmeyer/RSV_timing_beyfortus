@@ -468,7 +468,7 @@ def run_burden_analysis(df: pd.DataFrame, value_col: str = None) -> dict:
 def main():
     """Main entry point for burden analysis."""
     from src.build_seasons import build_seasons
-    from src.pull_hrd import load_cached_or_fetch
+    from src.pull_nssp import load_cached_or_fetch
 
     logger.info("Loading and processing data...")
     df_raw = load_cached_or_fetch()

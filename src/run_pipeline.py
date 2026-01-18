@@ -8,12 +8,14 @@ Ties together all analysis components:
 4. Trigger analysis (onset detection, coverage evaluation)
 5. Figure generation
 6. Table output
+7. Parallel NHSN (HRD) analysis for pediatric RSV admissions, ages 0-4
 
 Usage:
     python -m src.run_pipeline
 """
 
 import logging
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -54,10 +56,37 @@ def save_table(df: pd.DataFrame, name: str) -> Path:
     return filepath
 
 
+def run_r_figures() -> None:
+    """Run R-based figure generation script."""
+    script_path = PROJECT_ROOT / "src" / "figures.R"
+    if not script_path.exists():
+        logger.error(f"R figure script not found at {script_path}")
+        return
+
+    logger.info("Generating figures with R/ggplot2...")
+    try:
+        subprocess.run(
+            ["Rscript", str(script_path)],
+            check=True,
+            cwd=PROJECT_ROOT
+        )
+    except FileNotFoundError:
+        logger.error("Rscript not found. Install R and ensure Rscript is on PATH.")
+    except subprocess.CalledProcessError as exc:
+        logger.error(f"R figure script failed with exit code {exc.returncode}")
+
+def attach_metric_label(df: pd.DataFrame, metric_label: str) -> pd.DataFrame:
+    """Attach a metric label column for clarity in exported tables."""
+    labeled = df.copy()
+    labeled["metric_label"] = metric_label
+    return labeled
+
+
 def create_table1(
     df_outside: pd.DataFrame,
     df_national: pd.DataFrame,
-    df_regional: pd.DataFrame
+    df_regional: pd.DataFrame,
+    total_label: str = "Total Metric (sum over weeks)"
 ) -> pd.DataFrame:
     """
     Create Table 1: Summary of burden outside Oct-Mar window.
@@ -77,7 +106,7 @@ def create_table1(
             "Median Outside Fraction": row["national_outside_fraction_weighted"],
             "Q25": None,
             "Q75": None,
-            "Total Activity": row.get("total_national_burden", None)
+            total_label: row.get("total_national_burden", None)
         })
 
     # Regional summary
@@ -89,7 +118,7 @@ def create_table1(
             "Median Outside Fraction": row["median_outside_fraction"],
             "Q25": row["q25_outside_fraction"],
             "Q75": row["q75_outside_fraction"],
-            "Total Activity": None
+            total_label: None
         })
 
     df_table1 = pd.DataFrame(rows)
@@ -130,13 +159,119 @@ def create_trigger_comparison_table(
     return pd.DataFrame(summary)
 
 
+def create_cross_source_comparison(
+    nssp_burden: dict,
+    nhsn_burden: dict,
+    season: str = "2024-2025",
+    nssp_metric_label: str = "RSV ED visit percentage of total ED visits, all ages",
+    nhsn_metric_label: str = "Pediatric RSV hospital admissions, ages 0-4"
+) -> pd.DataFrame:
+    """
+    Compare NSSP and NHSN outside-fraction summaries for a single season.
+    """
+    rows = []
+
+    def build_row(source_label: str, metric_label: str, burden: dict) -> None:
+        outside = burden["outside_fraction"]
+        national = burden["national_summary"]
+
+        season_outside = outside[outside["season"] == season]
+        season_national = national[national["season"] == season]
+
+        if len(season_outside) == 0:
+            rows.append({
+                "Data Source": source_label,
+                "Metric": metric_label,
+                "Season": season,
+                "N States": 0,
+                "Median Outside Fraction": None,
+                "Unweighted Outside Fraction": None,
+                "Weighted Outside Fraction": None,
+                "Total Metric (sum over weeks)": None
+            })
+            return
+
+        median_outside = season_outside["outside_fraction"].median()
+        unweighted = None
+        weighted = None
+        total_metric = None
+
+        if len(season_national) > 0:
+            row = season_national.iloc[0]
+            unweighted = row.get("national_outside_fraction_unweighted", None)
+            weighted = row.get("national_outside_fraction_weighted", None)
+            total_metric = row.get("total_national_burden", None)
+
+        rows.append({
+            "Data Source": source_label,
+            "Metric": metric_label,
+            "Season": season,
+            "N States": len(season_outside),
+            "Median Outside Fraction": median_outside,
+            "Unweighted Outside Fraction": unweighted,
+            "Weighted Outside Fraction": weighted,
+            "Total Metric (sum over weeks)": total_metric
+        })
+
+    build_row("NSSP", nssp_metric_label, nssp_burden)
+    build_row("NHSN", nhsn_metric_label, nhsn_burden)
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["Data Source", "Season"])
+    return df
+
+
+def create_monthly_metric_comparison(
+    df_nssp: pd.DataFrame,
+    df_nhsn: pd.DataFrame,
+    nssp_value_col: str,
+    nhsn_value_col: str,
+    season: str = "2024-2025",
+    nssp_metric_label: str = "RSV ED visit percentage of total ED visits, all ages",
+    nhsn_metric_label: str = "Pediatric RSV hospital admissions, ages 0-4"
+) -> pd.DataFrame:
+    """
+    Compare monthly distributions of the NSSP and NHSN metrics for a season.
+    """
+    rows = []
+
+    def add_rows(df: pd.DataFrame, value_col: str, source_label: str, metric_label: str) -> None:
+        season_df = df[df["season"] == season].copy()
+        if len(season_df) == 0:
+            return
+
+        season_df["month"] = season_df["week_end"].dt.to_period("M").astype(str)
+        monthly = season_df.groupby("month")[value_col].sum()
+        total = monthly.sum()
+
+        for month, total_value in monthly.items():
+            rows.append({
+                "Data Source": source_label,
+                "Metric": metric_label,
+                "Season": season,
+                "Month": month,
+                "Month Metric Total": total_value,
+                "Month Metric Fraction": total_value / total if total > 0 else None
+            })
+
+    add_rows(df_nssp, nssp_value_col, "NSSP", nssp_metric_label)
+    add_rows(df_nhsn, nhsn_value_col, "NHSN", nhsn_metric_label)
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["Data Source", "Month"])
+    return df
+
+
 def log_summary_stats(
     df_outside: pd.DataFrame,
-    df_trigger: pd.DataFrame
+    df_trigger: pd.DataFrame,
+    label: str
 ) -> None:
     """Log key summary statistics."""
     logger.info("\n" + "=" * 70)
-    logger.info("PIPELINE SUMMARY")
+    logger.info(f"{label} SUMMARY")
     logger.info("=" * 70)
 
     # Outside fraction summary
@@ -176,11 +311,11 @@ def run_pipeline(force_refresh: bool = False) -> dict:
     logger.info("=" * 70 + "\n")
 
     # Import modules
-    from src.pull_nssp import load_cached_or_fetch, log_row_counts
+    from src.pull_nssp import load_cached_or_fetch as load_nssp, log_row_counts as log_nssp_rows
+    from src.pull_nhsn import load_cached_or_fetch as load_nhsn, log_row_counts as log_nhsn_rows
     from src.build_seasons import build_seasons, save_processed
     from src.analysis_burden import run_burden_analysis
     from src.analysis_trigger import run_trigger_analysis, summarize_trigger_by_season
-    from src.figures import generate_all_figures
 
     # Step 1: Load configuration
     logger.info("Step 1: Loading configuration...")
@@ -189,15 +324,25 @@ def run_pipeline(force_refresh: bool = False) -> dict:
     logger.info(f"  Primary outcome: {config['primary_outcome']}")
     logger.info(f"  Excluded jurisdictions: {config['geography']['exclude_jurisdictions'][:5]}...")
 
-    # Step 2: Extract data
+    labels = config.get("labels", {})
+    nssp_metric_label = labels.get(
+        "nssp_metric",
+        "RSV ED visit percentage of total ED visits, all ages"
+    )
+    nhsn_metric_label = labels.get(
+        "nhsn_metric",
+        "Pediatric RSV hospital admissions, ages 0-4"
+    )
+
+    # Step 2: Extract NSSP data
     logger.info("\nStep 2: Extracting data from CDC NSSP...")
-    df_raw = load_cached_or_fetch(max_age_days=1, force_refresh=force_refresh)
-    log_row_counts(df_raw)
+    df_raw = load_nssp(max_age_days=1, force_refresh=force_refresh)
+    log_nssp_rows(df_raw)
 
     # Step 3: Build seasons
     logger.info("\nStep 3: Building seasons and processing data...")
     df = build_seasons(df_raw)
-    save_processed(df)
+    save_processed(df, filename="nssp_processed.parquet", also_csv=True)
 
     # Step 4: Run burden analysis
     logger.info("\nStep 4: Running burden analysis...")
@@ -207,45 +352,145 @@ def run_pipeline(force_refresh: bool = False) -> dict:
     logger.info("\nStep 5: Running trigger analysis...")
     trigger_results = run_trigger_analysis(df)
 
-    # Step 6: Generate figures
-    logger.info("\nStep 6: Generating figures...")
-    figures = generate_all_figures(df, burden_results, trigger_results)
-
-    # Step 7: Save tables
-    logger.info("\nStep 7: Saving result tables...")
+    # Step 6: Save tables
+    logger.info("\nStep 6: Saving result tables...")
 
     # Table 1: Outside fraction summary
     table1 = create_table1(
         burden_results["outside_fraction"],
         burden_results["national_summary"],
-        burden_results["regional_summary"]
+        burden_results["regional_summary"],
+        total_label=f"Total {nssp_metric_label} (sum of weekly values)"
     )
-    save_table(table1, "table1_outside_fraction_summary")
+    save_table(table1, "nssp_table1_outside_fraction_summary")
 
     # Trigger comparison table
     trigger_table = create_trigger_comparison_table(trigger_results["trigger_coverage"])
-    save_table(trigger_table, "table_trigger_comparison")
+    save_table(trigger_table, "nssp_table_trigger_comparison")
+    save_table(burden_results["regional_summary"], "nssp_regional_summary")
 
     # Detailed state-level results
-    save_table(burden_results["outside_fraction"], "outside_fraction_by_state")
-    save_table(burden_results["material_activity"], "material_activity_by_state")
-    save_table(burden_results["extended_windows"], "extended_windows_evaluation")
-    save_table(trigger_results["trigger_coverage"], "trigger_coverage_by_state")
+    save_table(
+        attach_metric_label(burden_results["outside_fraction"], nssp_metric_label),
+        "nssp_outside_fraction_by_state"
+    )
+    save_table(
+        attach_metric_label(burden_results["material_activity"], nssp_metric_label),
+        "nssp_material_activity_by_state"
+    )
+    save_table(
+        attach_metric_label(burden_results["extended_windows"], nssp_metric_label),
+        "nssp_extended_windows_evaluation"
+    )
+    save_table(
+        attach_metric_label(trigger_results["trigger_coverage"], nssp_metric_label),
+        "nssp_trigger_coverage_by_state"
+    )
 
-    # Step 8: Log summary
+    # Step 7: Log summary
     log_summary_stats(
         burden_results["outside_fraction"],
-        trigger_results["trigger_coverage"]
+        trigger_results["trigger_coverage"],
+        label="NSSP"
     )
+
+    # Step 8: Extract NHSN data
+    logger.info("\nStep 8: Extracting data from CDC NHSN (HRD)...")
+    df_nhsn_raw = load_nhsn(max_age_days=1, force_refresh=force_refresh)
+    log_nhsn_rows(df_nhsn_raw)
+
+    # Step 9: Build seasons for NHSN
+    logger.info("\nStep 9: Building seasons and processing NHSN data...")
+    df_nhsn = build_seasons(df_nhsn_raw)
+    save_processed(df_nhsn, filename="nhsn_processed.parquet", also_csv=True)
+
+    # Step 10: Run burden analysis (NHSN)
+    logger.info("\nStep 10: Running burden analysis (NHSN)...")
+    nhsn_value_col = config.get("nhsn_primary_outcome", "rsv_ped_0_4")
+    nhsn_burden = run_burden_analysis(df_nhsn, value_col=nhsn_value_col)
+
+    # Step 11: Run trigger analysis (NHSN)
+    logger.info("\nStep 11: Running trigger analysis (NHSN)...")
+    nhsn_trigger = run_trigger_analysis(df_nhsn, value_col=nhsn_value_col)
+
+    # Step 12: Save NHSN tables
+    logger.info("\nStep 12: Saving NHSN result tables...")
+    nhsn_table1 = create_table1(
+        nhsn_burden["outside_fraction"],
+        nhsn_burden["national_summary"],
+        nhsn_burden["regional_summary"],
+        total_label="Total pediatric RSV admissions, ages 0-4"
+    )
+    save_table(nhsn_table1, "nhsn_table1_outside_fraction_summary")
+
+    nhsn_trigger_table = create_trigger_comparison_table(nhsn_trigger["trigger_coverage"])
+    save_table(nhsn_trigger_table, "nhsn_table_trigger_comparison")
+    save_table(nhsn_burden["regional_summary"], "nhsn_regional_summary")
+
+    save_table(
+        attach_metric_label(nhsn_burden["outside_fraction"], nhsn_metric_label),
+        "nhsn_outside_fraction_by_state"
+    )
+    save_table(
+        attach_metric_label(nhsn_burden["material_activity"], nhsn_metric_label),
+        "nhsn_material_activity_by_state"
+    )
+    save_table(
+        attach_metric_label(nhsn_burden["extended_windows"], nhsn_metric_label),
+        "nhsn_extended_windows_evaluation"
+    )
+    save_table(
+        attach_metric_label(nhsn_trigger["trigger_coverage"], nhsn_metric_label),
+        "nhsn_trigger_coverage_by_state"
+    )
+
+    # Step 13: Cross-source comparison tables
+    logger.info("\nStep 13: Saving NSSP vs NHSN comparison tables...")
+    cross_source = create_cross_source_comparison(
+        burden_results,
+        nhsn_burden,
+        nssp_metric_label=nssp_metric_label,
+        nhsn_metric_label=nhsn_metric_label
+    )
+    save_table(cross_source, "comparison_outside_fraction_2024_2025")
+
+    monthly_compare = create_monthly_metric_comparison(
+        df,
+        df_nhsn,
+        config.get("primary_outcome", "rsv_pct"),
+        nhsn_value_col,
+        nssp_metric_label=nssp_metric_label,
+        nhsn_metric_label=nhsn_metric_label
+    )
+    save_table(monthly_compare, "comparison_monthly_metric_2024_2025")
+
+    # Step 14: Log NHSN summary
+    log_summary_stats(
+        nhsn_burden["outside_fraction"],
+        nhsn_trigger["trigger_coverage"],
+        label="NHSN"
+    )
+
+    # Step 15: Generate figures (R/ggplot2)
+    logger.info("\nStep 15: Generating figures with R...")
+    run_r_figures()
 
     logger.info(f"\nPipeline completed at: {datetime.now().isoformat()}")
     logger.info("=" * 70)
 
     return {
-        "df": df,
-        "burden_results": burden_results,
-        "trigger_results": trigger_results,
-        "figures": figures
+        "nssp": {
+            "df": df,
+            "burden_results": burden_results,
+            "trigger_results": trigger_results,
+            "figures": None
+        },
+        "nhsn": {
+            "df": df_nhsn,
+            "burden_results": nhsn_burden,
+            "trigger_results": nhsn_trigger,
+            "figures": None
+        }
     }
 
 
@@ -255,29 +500,8 @@ def generate_figures_only() -> dict:
 
     For use with `make figures` when data is already processed.
     """
-    from src.analysis_burden import run_burden_analysis
-    from src.analysis_trigger import run_trigger_analysis
-    from src.figures import generate_all_figures
-
-    # Load processed data
-    processed_path = DATA_PROCESSED / "nssp_processed.parquet"
-
-    if not processed_path.exists():
-        logger.error(f"Processed data not found at {processed_path}")
-        logger.error("Run full pipeline first: python -m src.run_pipeline")
-        sys.exit(1)
-
-    logger.info(f"Loading processed data from {processed_path}")
-    df = pd.read_parquet(processed_path)
-
-    # Re-run analyses
-    burden_results = run_burden_analysis(df)
-    trigger_results = run_trigger_analysis(df)
-
-    # Generate figures
-    figures = generate_all_figures(df, burden_results, trigger_results)
-
-    return figures
+    run_r_figures()
+    return {}
 
 
 def main():

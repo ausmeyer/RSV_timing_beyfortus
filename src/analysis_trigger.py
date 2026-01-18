@@ -496,7 +496,7 @@ def summarize_trigger_by_season(df_trigger: pd.DataFrame) -> pd.DataFrame:
 def main():
     """Main entry point for trigger analysis."""
     from src.build_seasons import build_seasons
-    from src.pull_hrd import load_cached_or_fetch
+    from src.pull_nssp import load_cached_or_fetch
 
     logger.info("Loading and processing data...")
     df_raw = load_cached_or_fetch()

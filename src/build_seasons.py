@@ -41,11 +41,38 @@ STATE_ABBREVS = {
     'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
 }
 
+ABBREV_TO_STATE = {abbr: name for name, abbr in STATE_ABBREVS.items()}
+
 
 def load_config() -> dict:
     """Load configuration from config.yaml."""
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+def normalize_jurisdiction_names(
+    df: pd.DataFrame,
+    jurisdiction_col: str = "jurisdiction"
+) -> pd.DataFrame:
+    """
+    Normalize jurisdiction names by expanding state abbreviations when detected.
+
+    Some sources (e.g., NHSN) use two-letter abbreviations; others use full names.
+    """
+    df = df.copy()
+    values = df[jurisdiction_col].dropna().astype(str)
+    if values.empty:
+        return df
+
+    abbrev_share = (values.str.fullmatch(r"[A-Z]{2}")).mean()
+
+    if abbrev_share >= 0.6:
+        df[jurisdiction_col] = df[jurisdiction_col].map(ABBREV_TO_STATE).fillna(df[jurisdiction_col])
+        logger.info(
+            f"Expanded {abbrev_share:.0%} abbreviated jurisdictions to full names."
+        )
+
+    return df
 
 
 def assign_season(df: pd.DataFrame, week_col: str = "week_end") -> pd.DataFrame:
@@ -281,13 +308,18 @@ def add_state_flags(
     return df
 
 
-def save_processed(df: pd.DataFrame, filename: str = "nssp_processed.parquet") -> Path:
+def save_processed(
+    df: pd.DataFrame,
+    filename: str = "nssp_processed.parquet",
+    also_csv: bool = False
+) -> Path:
     """
     Save processed DataFrame to parquet.
 
     Args:
         df: Processed DataFrame
         filename: Output filename
+        also_csv: If True, also save a CSV copy for R plotting
 
     Returns:
         Path to saved file
@@ -301,6 +333,11 @@ def save_processed(df: pd.DataFrame, filename: str = "nssp_processed.parquet") -
     logger.info(f"  Shape: {df.shape}")
     logger.info(f"  Columns: {list(df.columns)}")
 
+    if also_csv:
+        csv_path = filepath.with_suffix(".csv")
+        df.to_csv(csv_path, index=False)
+        logger.info(f"Saved processed CSV to {csv_path}")
+
     return filepath
 
 
@@ -309,12 +346,13 @@ def build_seasons(df: pd.DataFrame) -> pd.DataFrame:
     Full season building pipeline.
 
     Applies all transformations:
-    1. Assign seasons
-    2. Flag fixed window
-    3. Filter jurisdictions
-    4. Add state abbreviations
-    5. Add HHS regions
-    6. Add state flags
+    1. Normalize jurisdiction names
+    2. Assign seasons
+    3. Flag fixed window
+    4. Filter jurisdictions
+    5. Add state abbreviations
+    6. Add HHS regions
+    7. Add state flags
 
     Args:
         df: Raw DataFrame from data extraction
@@ -327,7 +365,11 @@ def build_seasons(df: pd.DataFrame) -> pd.DataFrame:
     logger.info("=" * 50)
 
     # Step 1: Assign seasons
-    logger.info("\n1. Assigning seasons...")
+    logger.info("\n1. Normalizing jurisdiction names...")
+    df = normalize_jurisdiction_names(df)
+
+    # Step 2: Assign seasons
+    logger.info("\n2. Assigning seasons...")
     df = assign_season(df)
 
     # Drop rows without season assignment
@@ -336,24 +378,24 @@ def build_seasons(df: pd.DataFrame) -> pd.DataFrame:
     after = len(df)
     logger.info(f"Dropped {before - after:,} rows outside season ranges")
 
-    # Step 2: Flag fixed window
-    logger.info("\n2. Flagging fixed prophylaxis window (Oct 1 - Mar 31)...")
+    # Step 3: Flag fixed window
+    logger.info("\n3. Flagging fixed prophylaxis window (Oct 1 - Mar 31)...")
     df = flag_fixed_window(df)
 
-    # Step 3: Filter jurisdictions
-    logger.info("\n3. Filtering jurisdictions...")
+    # Step 4: Filter jurisdictions
+    logger.info("\n4. Filtering jurisdictions...")
     df = filter_jurisdictions(df)
 
-    # Step 4: Add state abbreviations
-    logger.info("\n4. Adding state abbreviations...")
+    # Step 5: Add state abbreviations
+    logger.info("\n5. Adding state abbreviations...")
     df = add_state_abbreviation(df)
 
-    # Step 5: Add HHS regions
-    logger.info("\n5. Adding HHS region mapping...")
+    # Step 6: Add HHS regions
+    logger.info("\n6. Adding HHS region mapping...")
     df = add_hhs_region(df)
 
-    # Step 6: Add state flags
-    logger.info("\n6. Adding state flags (Southeast, comparator)...")
+    # Step 7: Add state flags
+    logger.info("\n7. Adding state flags (Southeast, comparator)...")
     df = add_state_flags(df)
 
     logger.info("=" * 50)

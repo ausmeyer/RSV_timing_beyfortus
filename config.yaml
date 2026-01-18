@@ -20,6 +20,22 @@ fields:
   flu_pct: "percent_visits_influenza"
   combined_pct: "percent_visits_combined"
 
+# Data source - NHSN Weekly Hospital Respiratory Data (HRD)
+nhsn:
+  dataset_id: "ua7e-t2fy"
+  base_url: "https://data.cdc.gov/resource"
+  timeout: 30
+  max_retries: 3
+  page_size: 50000
+
+# Fields to extract from NHSN HRD
+nhsn_fields:
+  week_end: "weekendingdate"
+  jurisdiction: "jurisdiction"
+  rsv_ped_0_4: "numconfrsvnewadmped0to4"
+  rsv_ped_total: "totalconfrsvnewadmped"
+  rsv_total: "totalconfrsvnewadm"
+
 # Season definitions (July-June to capture early summer activity)
 # NSSP data available from Oct 2022 onwards
 seasons:
@@ -30,8 +46,16 @@ seasons:
     start: "2024-07-01"
     end: "2025-06-30"
 
-# Primary outcome field
+# Primary outcome field (NSSP percent of ED visits)
 primary_outcome: "rsv_pct"
+
+# Primary outcome field for NHSN analysis
+nhsn_primary_outcome: "rsv_ped_0_4"
+
+# Labels used in figures and tables
+labels:
+  nssp_metric: "RSV ED visit percentage of total ED visits, all ages"
+  nhsn_metric: "Pediatric RSV hospital admissions, ages 0-4"
 
 # Fixed prophylaxis window (per season year Y: Oct 1 Y to Mar 31 Y+1)
 # This aligns with CDC's Oct 1 through Mar 31 guidance for continental US
@@ -63,6 +87,22 @@ geography:
     - "Hawaii"        # Different timing patterns
     - "Missouri"      # No NSSP data available
     - "South Dakota"  # No NSSP data available
+    - "USA"           # National aggregate (NHSN)
+    - "Region 1"      # Regional aggregates (NHSN)
+    - "Region 2"
+    - "Region 3"
+    - "Region 4"
+    - "Region 5"
+    - "Region 6"
+    - "Region 7"
+    - "Region 8"
+    - "Region 9"
+    - "Region 10"
+    - "AS"            # Territories reported as abbreviations (NHSN)
+    - "GU"
+    - "MP"
+    - "PR"
+    - "VI"
     - "Guam"          # Territory, no data
     - "Puerto Rico"   # Territory
     - "Virgin Islands"  # Territory

@@ -1,7 +1,7 @@
 # RSV Timing / Beyfortus Analysis Pipeline
 # Usage: make all
 
-.PHONY: all clean data analysis figures help
+.PHONY: all clean data analysis figures stats help
 
 # Default target: run everything
 all: analysis
@@ -11,6 +11,8 @@ all: analysis
 data:
 	@echo "Fetching NSSP data from CDC Socrata..."
 	python -m src.pull_nssp
+	@echo "Fetching NHSN HRD data from CDC Socrata..."
+	python -m src.pull_nhsn
 	@echo "Data pull complete."
 
 # Run full analysis pipeline (includes data pull if needed)
@@ -24,6 +26,12 @@ figures:
 	@echo "Generating figures..."
 	python -c "from src.run_pipeline import generate_figures_only; generate_figures_only()"
 	@echo "Figures saved to results/figures/"
+
+# Generate manuscript statistics summary
+stats:
+	@echo "Generating manuscript statistics..."
+	python -m src.manuscript_stats
+	@echo "Statistics saved to results/manuscript_stats.txt"
 
 # Clean all generated files
 clean:
@@ -45,5 +53,6 @@ help:
 	@echo "  make data      - Pull data from CDC Socrata only"
 	@echo "  make analysis  - Run analysis (pulls data if needed)"
 	@echo "  make figures   - Regenerate figures only"
+	@echo "  make stats     - Generate manuscript statistics (results/manuscript_stats.txt)"
 	@echo "  make clean     - Remove all generated files"
 	@echo "  make help      - Show this help message"
