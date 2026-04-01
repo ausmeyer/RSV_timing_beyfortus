@@ -58,3 +58,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Cover letters and submission files
+*cover*
+*review*
+*response*
